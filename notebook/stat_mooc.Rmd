@@ -1,0 +1,1238 @@
+---
+title: "R Notebook"
+output: html_document
+---
+
+# ANALYSE STATISTIQUE - MOOC EFFECTUATION 
+ Projet académique : Reproduction de "A Tale of Two MOOCs" (Cy Tech - Sciences-Po Saint-Germain-En-Laye)
+ Auteur : Naïma Beck
+ Année académique : 2024/2025
+ =============================================================================
+
+### OBJECTIF GLOBAL : 
+ - Comprendre les déterminants de l'engagement dans les MOOCs
+ - Identifier les profils types d'apprenants  
+ - Valider/infirmer les résultats de l'article de référence
+
+### MÉTHODOLOGIE :
+ - Analyse de 3 cohortes (itérations) du MOOC Effectuation
+ - Approche mixte : statistiques descriptives + modélisation
+ - Validation des hypothèses par tests statistiques
+
+ =============================================================================
+
+# 1. Libraries
+
+```{r}
+libraries <- c("dplyr", "tidyr", "vcd", "vcdExtra", "ggplot2", 
+               "visdat", "car", "broom", "forestplot", "tibble", "patchwork")
+
+# Vérification et installation des bibliothèques manquantes
+for (lib in libraries) {
+  if (!require(lib, character.only = TRUE)) {
+    install.packages(lib, dependencies = TRUE)
+    library(lib, character.only = TRUE)
+  } else {
+    message(paste("La bibliothèque", lib, "est déjà installée et chargée."))
+  }
+}
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(vcd)
+library(vcdExtra)
+library(ggplot2)
+library(visdat)
+library(car)
+library(broom)
+library(forestplot)
+library(tibble)
+library(patchwork)
+```
+
+
+# 2. Préparation du jeu de donnée
+
+Objectif : Fusionner les 3 itérations du MOOC et créer les variables synthétiques
+ 
+### Importation des jeux de données des logs de la n-ieme itération du MOOC Effectuation
+```{r}
+usages.effec1=read.csv("../data/usages.effec1.csv", fileEncoding = "UTF-8")
+usages.effec2=read.csv("../data/usages.effec2.csv", fileEncoding = "UTF-8")
+usages.effec3=read.csv("../data/usages.effec3.csv", fileEncoding = "UTF-8")
+```
+
+```{r}
+head(usages.effec1)
+```
+
+### Importation des jeux de données sur des questionnaires
+```{r}
+effect1.quest.compil=read.csv("../data/effec1.quest.compil.csv", fileEncoding = "ISO-8859-1")
+effect2.quest.compil=read.csv("../data/effec2.quest.compil.csv", fileEncoding = "ISO-8859-1")
+effect3.quest.compil=read.csv("../data/effec3.quest.compil.csv", fileEncoding = "ISO-8859-1")
+```
+
+```{r}
+head(effect1.quest.compil)
+```
+## 1er liaison :  ”column bind”
+
+### Lier les données de logs et les données de questionnaires pour une itération donnée
+```{r}
+mooc1 <- merge(usages.effec1, effect1.quest.compil, by = "Student_ID", all = TRUE)
+mooc2 <- merge(usages.effec2, effect2.quest.compil, by = "Student_ID", all = TRUE)
+mooc3 <- merge(usages.effec3, effect3.quest.compil, by = "Student_ID", all = TRUE)
+```
+
+
+### Ajout d'une colonne iteration à chaque DataFrame (en 1e position)
+```{r}
+mooc1 <- mooc1 %>% 
+  mutate(iteration = 1)%>% 
+  select(iteration, everything())
+
+mooc2 <- mooc2 %>% 
+  mutate(iteration = 2) %>% 
+  select(iteration, everything())
+
+mooc3 <- mooc3 %>% 
+  mutate(iteration = 3) %>% 
+  select(iteration, everything())
+```
+
+```{r}
+head(mooc1)
+head(mooc2)
+head(mooc3)
+```
+## Uniformatisation des colonnes
+
+```{r}
+cat("Nombre de colonnes dans le 1e jeu de donnée :", ncol(mooc1), "\n")
+cat("Nombre de colonnes dans le 2e jeu de donnée :", ncol(mooc2), "\n")
+cat("Nombre de colonnes dans le 3e jeu de donnée :", ncol(mooc3), "\n")
+```
+
+### Visualisation des colonnes uniquement présentes dans une jeu de donnée
+```{r}
+# Noms des colonnes
+col_mooc1 <- colnames(mooc1)
+col_mooc2 <- colnames(mooc2)
+col_mooc3 <- colnames(mooc3)
+
+# Colonnes spécifiques à chaque DataFrame
+unique_to_mooc1 <- setdiff(col_mooc1, union(col_mooc2, col_mooc3))
+unique_to_mooc2 <- setdiff(col_mooc2, union(col_mooc1, col_mooc3))
+unique_to_mooc3 <- setdiff(col_mooc3, union(col_mooc1, col_mooc2))
+
+# Aperçu
+list(
+  Unique_to_mooc1 = unique_to_mooc1,
+  Unique_to_mooc2 = unique_to_mooc2,
+  Unique_to_mooc3 = unique_to_mooc3
+)
+```
+Une résultat important que nous utiliserons plus tards est que **`Certif.bin`** n'existe que dans mooc3. 
+
+### Fonction qui ajoute les colonnes manquantes avec du NA
+```{r}
+add_missing_columns <- function(df, all_columns) {
+  missing_cols <- setdiff(all_columns, colnames(df)) # Colonnes manquantes
+  for (col in missing_cols) {
+    df[[col]] <- NA # Ajouter chaque colonne avec NA
+  }
+  return(df)
+}
+
+#toutes les colonnes
+all_columns <- Reduce(union, list(col_mooc1, col_mooc2, col_mooc3))
+```
+
+
+### Ajout des colonnes manquantes à chaque DataFrame
+```{r}
+mooc1 <- add_missing_columns(mooc1, all_columns)
+mooc2 <- add_missing_columns(mooc2, all_columns)
+mooc3 <- add_missing_columns(mooc3, all_columns)
+```
+
+```{r}
+head(mooc1)
+head(mooc2)
+head(mooc3)
+```
+
+### Problème de type de valeur pour certaines colonnes 
+```{r}
+mooc2$birth.year <- suppressWarnings(as.numeric(mooc2$birth.year))
+mooc3$Curiosity.MOOC <- suppressWarnings(as.integer(mooc3$Curiosity.MOOC))
+mooc3$Rencontres <- suppressWarnings(as.integer(mooc3$Rencontres))
+```
+
+## 2e liaison : ”row bind” : obtention d'un unique jeu de donnée
+```{r}
+mooc_transition <- bind_rows(mooc1, mooc2, mooc3)
+
+head(mooc_transition)
+```
+
+## Simplification
+
+Avant toute manipulation, nous avons vérifié q'il n'y avait pas de données manquantes dans les colonnes que nous ciblons.
+
+### Nombre de quiz réalisés
+```{r}
+mooc_transition$quizz_realises <- rowSums(mooc_transition[, c("Quizz.1.bin", "Quizz.2.bin", "Quizz.3.bin", "Quizz.4.bin", "Quizz.5.bin")], na.rm = TRUE)
+
+
+head(mooc_transition$quizz_realises)
+```
+
+### Nombre de vidéos visionnées
+```{r}
+mooc_transition$videos_visionnees <- rowSums(mooc_transition[, c("S1.L1", "S1.L2", "S1.L3", "S1.L4", "S1.L5",
+                                       "S2.L1", "S2.L2", "S2.L3", "S2.L4", "S2.L5",
+                                       "S3.L1.1", "S3.L1.2", "S3.L2", "S3.L3", "S3.L4",
+                                       "S3.L5", "S4.L1.1", "S4.L1.2", "S4.L2", "S4.L3",
+                                       "S4.L4", "S4.L5", "S5.L1.1", "S5.L1.2", "S5.L2",
+                                       "S5.L3", "S5.L4", "S5.L5")], na.rm = TRUE)
+head(mooc_transition$videos_visionnees)
+```
+
+
+### Colonne **`HDI`** avec les regroupements demandés  
+```{r}
+mooc_transition <- mooc_transition %>%
+  mutate(HDI = case_when(
+    Country_HDI == "M" ~ "I", # Moyen devient Intermédiaire
+    Country_HDI == "H" ~ "I", # Haut devient I Intermédiaire
+    TRUE ~ Country_HDI  
+    )
+  )
+```
+
+
+### Comparaison avec la colonne **`Country_HDI.fin`**
+```{r}
+table(mooc_transition$HDI == mooc_transition$Country_HDI.fin)  # Vérifie si les valeurs de HDI correspondent à 'Country_HDI.fin'
+```
+
+Ce nombre de FALSE s'explique par le fait qu'il n'y a pas I dans la colonne **`Country_HDI.fin`** mais H&M.
+Nous allons donc creer une colonne intermédiaire qui respecte les consignes.
+
+```{r}
+mooc_transition <- mooc_transition %>%
+  mutate(Country_HDI.fin2 = case_when(
+    HDI == "I" ~ "H&M",  
+    TRUE ~ HDI            
+  ))
+
+
+table(mooc_transition$Country_HDI.fin2 == mooc_transition$Country_HDI.fin)
+```
+## Simplifications supplémentaires
+
+
+### Nombre de posts sur le forum
+```{r}
+mooc_transition$post_realises <- rowSums(mooc_transition[, c("Post.forum.0", "Post.forum.1", "Post.forum.1.2", "Post.forum.2", 
+                                       "Post.forum.2.2", "Post.forum.3", "Post.forum.4", "Post.forum.4.2", 
+                                       "Post.forum.5", "Post.forum.5.2")], na.rm = TRUE)
+```
+
+### Nombre de vue sur le forum
+```{r}
+mooc_transition$vue_realisee <- rowSums(mooc_transition[, c("view.forum.0", "view.forum.1", "view.forum.1.2", "view.forum.2", 
+                                      "view.forum.2.2", "view.forum.3", "view.forum.4", "view.forum.4.2", 
+                                      "view.forum.5", "view.forum.5.2")], na.rm = TRUE)
+
+```
+
+### Jeu de donnée final
+```{r}
+mooc <- mooc_transition
+
+#colonnes inutiles
+cols_to_remove <- c(
+  "Quizz.1.score", "Quizz.1.bin", "Quizz.2.score", "Quizz.2.bin", "Quizz.3.score", "Quizz.3.bin",
+  "Quizz.4.bin", "Quizz.4.score", "Quizz.5.bin", "Quizz.5.score", "Intro.MOOC", "Prez.sem.1",
+  "S1.L1", "S1.L2", "S1.L3", "S1.L4", "S1.L5", "S1.L6", "Prez.sem.2", "S2.L1", "S2.L2", "S2.L3",
+  "S2.L4", "S2.L5", "S2.L6", "Prez.sem.3", "S3.L1.1", "S3.L1.2", "S3.L2", "S3.L3", "S3.L4", "S3.L5",
+  "Prez.sem.4", "S4.L1.1", "S4.L1.2", "S4.L2", "S4.L3", "S4.L4", "S4.L5", "Prez.sem.5", "S5.L1.1",
+  "S5.L1.2", "S5.L2", "S5.L3", "S5.L4", "S5.L5", "Post.forum.0", "view.forum.0", "Post.forum.1",
+  "Post.forum.1.2", "view.forum.1", "view.forum.1.2", "Post.forum.2", "Post.forum.2.2", "view.forum.2",
+  "view.forum.2.2", "Post.forum.3", "view.forum.3", "Post.forum.4", "Post.forum.4.2", "view.forum.4",
+  "view.forum.4.2", "Post.forum.5", "Post.forum.5.2", "view.forum.5", "view.forum.5.2","Country_HDI.fin","Country_HDI.fin","Country_HDI.fin2"
+)
+
+# nettoyage
+mooc <- mooc[, !(names(mooc) %in% cols_to_remove)]
+
+head(mooc)
+```
+
+
+# 3 Description du jeu de données
+
+Avant de commencer toute manipulation, il s'agit de vérifier si les colonnes que nous allons utiliser ont un nombre anormal de données manquantes.
+
+## Vérification des données
+
+### Vérifier ou il ya du NA
+```{r}
+na_counts_before <- colSums(is.na(mooc[, c("Exam.bin", "Certif.bin", "quizz_realises", "Assignment.bin", "videos_visionnees")]))
+
+na_counts_before
+```
+### Répartitions des valeurs dans la colonne **`Certif.bin`**
+```{r}
+table(mooc$Certif.bin, useNA = "always")
+```
+Il y a autant de NA car nous avons vu plus haut que la colonne **`Certif.bin`** n'existe que dans la 3e itérations.
+Pour les colonnes **`Exam.bin`** et **`Assignment.bin`**, c'est parce que dans les jeux de données d'origine (sur les questionnaires) il y a des **`Student_id`** unique (pas dans les jeux de donnée sur les logs). Et lors du rbind nous n'avons pas gardé l'intersection mais l'union. Cela a entraîné l'ajout de colonnes avec des valeurs NA pour les lignes où ces colonnes n'étaient pas présentes initialement.
+
+
+### Répartitions des valeurs dans la colonne **`Exam.bin`**
+```{r}
+table(mooc$Exam.bin)
+```
+Nous observons qu'il y a un grand nombre de 0 (la majorité) donc pour réduire le taux de NA dans **`Certif.bin`**, nous allons utiliser ce résultat.
+Quand une personne n'a pas passé l'exam, elle ne peut logiquement pas avoir de certificat.
+
+### Modifcation de `Certif.bin`
+```{r}
+mooc <- mooc %>%
+  mutate(Certif.bin = ifelse(Exam.bin == 0, 0, Certif.bin))
+```
+
+### Modifcation de `Exam.bin`
+```{r}
+#mooc <- mooc %>%
+  #mutate(Exam.bin = ifelse(Certif.bin == 1, 1, Exam.bin))
+```
+
+### Répartion des valeurs après modification de **`Certif.bin`**
+```{r}
+table(mooc$Certif.bin, useNA = "always")
+```
+Pour la suite nous garderons ce nombre de NA, car rien ne nous permet de soutenir avec certitude que ce sont des personnes qui ont obtenue le certificat. Cette approche conservative évite les biais d'imputation.
+
+## 3.1 Typologie d’apprenants
+
+
+### Création de la colonne 'learner_type'
+
+Nous avons considéré que dans l'énoncé un '/' représente un 'ou logique'.
+
+```{r}
+mooc <- mooc %>%
+  mutate(learner_type = case_when(
+    Exam.bin == 1 | Certif.bin == 1 ~ "Completer",
+    (quizz_realises >= 1 | Assignment.bin == 1) & Exam.bin == 0 & Certif.bin == 0 ~ "Disengaging Learner",
+    quizz_realises == 0 & Assignment.bin == 0 & videos_visionnees >= 6 ~ "Auditing Learner",
+    quizz_realises == 0 & Assignment.bin == 0 & videos_visionnees < 6 ~ "Bystander",
+    TRUE ~ NA #si pb 
+  ))
+
+head(mooc$learner_type)
+```
+
+### Résultats de la variable 'learner_type'
+```{r}
+table(mooc$learner_type, useNA = "always")
+```
+
+### Proportions(%) et quantité des types d'apprenants par itération
+```{r}
+learner <- mooc %>%
+  select(iteration, learner_type) %>%
+  group_by(iteration, learner_type) %>% 
+  count() %>% 
+  group_by(learner_type) %>% 
+  mutate(proportion = round(freq / sum(freq)*100,2)) %>% #arrondie
+  ungroup()
+
+head(learner)
+
+```
+
+### Proportion des types d'apprenant par itération (%)
+```{r}
+learner_summary <- learner %>%
+  select(iteration, learner_type, proportion) %>%
+  pivot_wider(names_from = iteration, values_from = proportion, names_prefix = "Iteration ") %>%
+  arrange(learner_type)
+
+learner_summary
+```
+
+
+### Représentation des données manquantes
+```{r}
+
+
+mooc_visdat <- mooc %>% select(-iteration, -Student_ID) #pas pertinent de les garder
+
+
+vis_miss(mooc_visdat, warn_large_data = FALSE)+ 
+  theme(axis.text.x = element_text(size = 6,angle = 90)) #dans cet orientation pour plus de lisibilité (à 45° il manquait un bout du graphe)
+```
+
+### Table des données manquantes
+```{r}
+# Calculer le nombre et le pourcentage de valeurs manquantes par colonne
+missing_data <- data.frame(
+  Variables = colnames(mooc),  # Nom de toutes les colonnes
+  Nombre = sapply(mooc, function(x) sum(is.na(x))),  #nb
+  Pct.manquant = round(sapply(mooc, function(x) mean(is.na(x)) * 100),2)  #Pourcentage 
+)
+
+# classement
+missing_data <- missing_data %>%
+  arrange(desc(Pct.manquant))  
+
+head(missing_data)
+```
+
+
+# 4 Chi2 et mosaic plot
+
+## Chi2
+
+### Visualiser les valeurs que prennent la colonne Gender
+```{r}
+unique(mooc$Gender)
+```
+
+### Transformation des valeurs de la colonne Gender
+```{r}
+mooc$Gender <- ifelse(mooc$Gender == "une femme", 'F', mooc$Gender) 
+mooc$Gender <- ifelse(mooc$Gender == "un homme", 'M', mooc$Gender)
+
+head(mooc$Gender)
+```
+ 
+### Table croisée entre HDI et Gender
+```{r}
+mooc_croise <- table(mooc$HDI, mooc$Gender)
+print(mooc_croise)
+```
+### Test du Chi2
+```{r}
+chi2_test <- chisq.test(mooc_croise)
+print(chi2_test)
+print("Où X-squared : la statistique Chi², df : les degrés de liberté")
+```
+
+### Résidus du test de chi2
+```{r}
+residus <- chi2_test$residuals
+
+print(residus)
+```
+Les résidus du test chi2 sont la différence entre les observations observées et les valeurs attendues sous l'hypothèse d'indépendance, normalisée par l'écart-type.
+
+## Mosaic plot 
+
+```{r}
+mosaicplot(mooc_croise, 
+           color = TRUE, #couleurs pour les cases
+           main = "Mosaic Plot des Résidus du Chi2",  #Titre 
+           xlab = "HDI",  #axe des X
+           ylab = "Gender", #axe des Y
+           shade = TRUE) # résidus sous forme de couleurs
+```
+
+
+```{r}
+# tableau de contingence manuel
+mooc_croise <- matrix(c(147, 883, 233, 432, 2546, 4716), 
+                      nrow = 3, 
+                      byrow = TRUE,
+                      dimnames = list(c("B", "I", "TH"), c("F", "M")))
+
+
+#noms des catégories pour affichage explicite
+dimnames(mooc_croise) <- list(HDI = c("B", "I", "TH"), Gender = c("F", "M"))
+
+#mosaic plot
+mosaic(mooc_croise, 
+       gp = shading_max, 
+       split_vertical = TRUE,    # Découpe verticale
+       main = "Mosaic Plot des Résidus du Chi2",  # Titre
+       xlab = "HDI",  # Axe des X
+       ylab = "Gender", # Axe des Y
+       legend = TRUE)  
+
+```
+
+## V de cramer  
+
+### Paramètres
+```{r}
+# taille de l'échantillon (nb tot d'observations)
+n <- sum(mooc_croise)
+
+k <- ncol(mooc_croise)  # Nombre de modalités de la variable HDI
+r <- nrow(mooc_croise)  # Nombre de modalités de la variable Gender
+```
+
+### V de Cramer
+```{r}
+V_cramer <- sqrt(chi2_test$statistic / (n * min(k - 1, r - 1)))
+
+V_cramer
+```
+
+# 5 Modèle linéaire, tests non paramétriques
+
+## 5.1 Sur IRIS
+
+### Importation du jeu de donnée
+```{r}
+data(iris)
+head(iris)
+```
+### Représentation graphique de la largeur du pétale en fonction de la longueur du pétale selon l'espèce
+```{r}
+ggplot(iris, aes(x = Petal.Length, y = Petal.Width, color = Species, shape = Species)) +
+  geom_point(size = 2) +
+  theme_minimal() + 
+  labs(title = "Largeur du pétale en fonction de la longueur du pétale",
+       x = "Longueur du pétale (cm)",
+       y = "Largeur du pétale (cm)",
+       shape = "Espèces",
+       color="Espèces")
+```
+
+### Avec la régression linéaire sur le couple de variables Petal.Length et Petal.Width
+```{r}
+# sur le graphe
+ggplot(iris, aes(x = Petal.Length, y = Petal.Width, color = Species, shape = Species)) +
+  geom_point(size = 2) +
+  theme_minimal() + 
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  labs(title = "Régression linéaire : Largeur du pétale en fonction de la longueur du pétale",
+       x = "Longueur du pétale (cm)",
+       y = "Largeur du pétale (cm)",
+       shape = "Espèces",
+       color="Espèces")
+```
+
+### Coefficient de corrélation de Pearson associé
+```{r}
+corr <- cor(iris$Petal.Length, iris$Petal.Width)
+cat("Le coefficient de corrélation de Pearson est :", corr, "\n")
+
+```
+
+### Avec la régression linéaire sur le couple de variables Sepal.Length et Sepal.Width
+```{r}
+#ajustement
+model <- lm(Sepal.Width ~ Sepal.Length, data = iris)
+
+# sur le graphe
+ggplot(iris, aes(x = Sepal.Length, y = Sepal.Width, color = Species, shape = Species)) +
+  geom_point(size = 2) +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  labs(title = "Régression linéaire : Largeur du sépale en fonction de la longueur du sépale",
+       x = "Longueur du sépale (cm)",
+       y = "Largeur du sépale (cm)",
+       shape = "Espèces",
+       color="Espèces")
+```
+
+### Coefficient de corrélation de Pearson associé
+```{r}
+corr <- cor(iris$Sepal.Length, iris$Sepal.Width)
+cat("Le coefficient de corrélation de Pearson est :", corr, "\n")
+
+```
+
+
+### Boxplot de la largeur du pétale par espèce
+```{r}
+ggplot(iris, aes(x = Species, y = Petal.Width, fill = Species)) +
+  geom_boxplot() +
+  theme_minimal() + 
+  labs(title = "Distribution de la largeur du pétale par espèce",
+       x = "Espèce",
+       y = "Largeur du pétale (cm)") +
+  guides(fill = "none") #retirer la légende sur el coté
+```
+
+Pour tester si les moyennes de la variable continue : la largeur du pétale diffèrent entre plusieurs espèces (species) on fait une Anova
+
+### Anova
+```{r}
+anova_model<- aov(Petal.Width ~ Species, data = iris)
+summary(anova_model)
+print("Avec Df : degrés de liberté, Sum:Sum of Squares, Mean Sq:Mean Square,  F : F-statistic, Pr(>F):p-value ")
+```
+
+### Table des sommes des carrés
+```{r}
+cat("Table des sommes des carrés :\n")
+somme_carres <- anova_table[, c("Df","Sum Sq","Mean Sq"), drop = FALSE] # Extraire uniquement la colonne des sommes des carrés
+print(somme_carres)
+```
+
+### Table des Statistiques inférentielles
+```{r}
+cat("Table des statistiques inférentielles :\n")
+stats_inferentielles <- anova_table[, c("Mean Sq","F value", "Pr(>F)")]
+print(stats_inferentielles)
+```
+
+### Diagnostic du modèle : Visualisation
+```{r}
+residus_data <- data.frame(residus = residus)
+
+ggplot(residus_data, aes(sample = residus)) +
+  stat_qq() +
+  stat_qq_line(color = "red") +
+  ggtitle("QQ-Plot des résidus") +
+  theme_minimal()
+
+```
+Etant donné que les points sont proches de la droite, il n'y a pas besoin de faire de test supplémentaire.
+
+Dans le cas contraire voici ce qu'on ferait : 
+
+### Test de Kruskal-Wallis
+```{r}
+kruskal_test <- kruskal.test(Petal.Width ~ Species, data = iris)
+cat("Statistique de Kruskal-Wallis:", kruskal_test$statistic, "\n")
+cat("p-value de Kruskal-Wallis:", kruskal_test$p.value, "\n")
+```
+
+## 5.2 Application aux données des MOOC
+
+### Jeu de donnée réduit
+```{r}
+mini_mooc <- mooc %>%
+  select(Gender, videos_visionnees, quizz_realises, HDI)
+
+head(mini_mooc)
+```
+
+### Mettre le genre en facteur
+```{r}
+mini_mooc$Gender <- factor(mini_mooc$Gender, levels = c("M", "F"))
+
+levels(mini_mooc$Gender)
+```
+
+Ici on fait comme si videos_visionnees était normalement distribuée.
+
+### Test de Student
+```{r}
+t_test <- t.test(videos_visionnees ~ Gender, data = mini_mooc, var.equal = TRUE)
+
+t_test
+```
+
+Puisque la distribution des données n'est pas normale, un test non paramétrique de Wilcoxon est plus approprié. 
+
+### Test non paramétrique de Wilcoxon
+```{r}
+wilcoxon_test <- wilcox.test(videos_visionnees ~ Gender, data = mini_mooc)
+
+# Afficher les résultats du test
+wilcoxon_test
+```
+
+### Régression linéaire
+```{r}
+regression_linaire <- lm(quizz_realises ~ videos_visionnees, data = mini_mooc)
+summary(regression_linaire)
+```
+
+### Graphe de régression linéaire seule
+```{r}
+ggplot(mini_mooc, aes(x = quizz_realises, y = videos_visionnees)) +
+  geom_point(alpha = 0.7) +  # Points de données
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +  # Ligne de régression
+  labs(title = "Relation entre le Nombre de quiz réalisés et le Nombre de vidéos vues",
+       x = "Nombre de vidéos vues",
+       y = "Nombre de quiz réalisés") +
+  theme_minimal()
+```
+
+### Etude des résidus
+```{r}
+residuals_reglin <- residuals(regression_linaire) 
+qqnorm(residuals_reglin)
+qqline(residuals_reglin, col = "red", lwd = 2)
+```
+
+Les résidus ne suivent pas une distribution normale, on s'oriente donc vers une correlation de spearman.
+
+
+Corrélation de Spearman (les données ne sont pas normalement distribuées) :
+
+### Test de corrélation de Spearman
+
+### coeff
+```{r}
+cor_spearman <- cor(mini_mooc$quizz_realises,  mini_mooc$videos_visionnees, method = "spearman") #coefficient
+```
+
+### test
+```{r}
+spearman_corr_test <- cor.test(mini_mooc$quizz_realises, mini_mooc$videos_visionnees, method = "spearman")
+
+spearman_corr_test
+```
+
+### graphe
+```{r}
+plot(mini_mooc$videos_visionnees, mini_mooc$quizz_realises, 
+     main = "Corrélation de Spearman: Quizz vs Vidéos",
+     xlab = "Vidéos visionnées",
+     ylab = "Quizz réalisés",
+     pch = 19, col = "blue")
+
+# Ajout d'une courbe de tendance non linéaire (loess)
+lines(lowess(mini_mooc$videos_visionnees, mini_mooc$quizz_realises), col = "red", lwd = 2)
+```
+Corrélation de Pearson (si les données étaient normalement distribuées) :
+### Test de corrélation de Pearson
+
+### Coeff
+```{r}
+pearson_corr <- cor(mini_mooc$quizz_realises, mini_mooc$videos_visionnees, method = "pearson") 
+```
+
+### Test
+```{r}
+pearson_corr_test <- cor.test(mini_mooc$quizz_realises, mini_mooc$videos_visionnees, method = "pearson")
+
+pearson_corr_test
+```
+
+### Graphe
+```{r}
+plot(mini_mooc$quizz_realises, mini_mooc$videos_visionnees, 
+     main = paste("Corrélation de Pearson: r =", round(pearson_corr, 2)), 
+     xlab = "Quizz réalisés", ylab = "Vidéos visionnées", 
+     pch = 19, col = "darkgreen")
+
+# Ajouter une droite de régression linéaire (corrélation de Pearson est linéaire)
+abline(lm(mini_mooc$videos_visionnees ~ mini_mooc$quizz_realises), col = "red", lwd = 2)
+```
+
+
+Nous allons utiliser une ANOVA pour évaluer l'effet de deux facteurs : HDI (indice de développement humain) et Genre sur la variable "videos_visionnees". 
+
+Dans ce cas, nous ne nous intéressons pas aux interactions entre les variables.
+
+```{r}
+head(mini_mooc)
+```
+### Hypothèses de l'anova
+```{r}
+#supp des valeurs manquantes
+mini_mooc_anova <- na.omit(mini_mooc)
+
+#transformation des variables catégorielles
+mini_mooc_anova$HDI <- factor(mini_mooc_anova$HDI)
+mini_mooc_anova$Gender <- factor(mini_mooc_anova$Gender, levels = c("M", "F"))
+
+head(mini_mooc_anova)  
+summary(mini_mooc_anova)  
+```
+### Modèle linéaire pour l'ANOVA
+```{r}
+mod <- lm(videos_visionnees ~ HDI + Gender, data = mini_mooc_anova)
+```
+
+### Table d'anova
+```{r}
+anova_result <- anova(mod)
+
+anova_result
+```
+
+### Résumé des coefficients du modèle
+```{r}
+summary(mod)
+```
+
+### Table d'anova plus esthétique 
+```{r}
+#conversion en data frame
+anova_df <- as.data.frame(anova_result)
+
+# colonne de signification des p-values
+anova_df$Significance <- ifelse(anova_df$`Pr(>F)` < 0.05, "Significant", "Not Significant")
+
+anova_df
+```
+
+
+### Stat inférentielle
+```{r}
+anova_inferential_stats <- anova_result[, c("Sum Sq", "F value", "Pr(>F)")]
+
+anova_inferential_stats
+```
+#### Estimation des moyennes par genre (Gender)
+```{r}
+means_gender <- tapply(mini_mooc_anova$videos_visionnees, mini_mooc_anova$Gender, mean)
+cat("\nMoyennes par genre (Gender) :\n")
+print(means_gender)
+```
+### Calcul des eta²
+```{r}
+total_ss <- sum(anova_result$`Sum Sq`)  # Somme des carrés totale
+anova_result$eta2 <- anova_result$`Sum Sq` / total_ss  # Calcul de eta²
+
+anova_result
+```
+
+### Interaction
+```{r}
+mod <- lm(videos_visionnees ~ Gender + HDI + Gender*HDI, data = mini_mooc_anova)
+```
+
+```{r}
+summary(mod)
+```
+### Equivalent non paramétrique
+```{r}
+result <- kruskal.test(videos_visionnees ~ interaction(Gender, HDI), data = mini_mooc) 
+print(result)
+```
+
+#6
+
+##6.1
+
+
+```{r}
+mooc_reduit <- mooc %>%
+  select(Gender,HDI,Exam.bin) %>%
+  filter(complete.cases(.))
+
+head(mooc_reduit)
+```
+
+### Conversion des variables en facteurs
+```{r}
+mooc_reduit$Gender <- factor(mooc_reduit$Gender, levels = c("M", "F"))
+mooc_reduit$HDI <- as.factor(mooc_reduit$HDI)
+```
+
+### Modèle de régression logistique
+```{r}
+modele_logistique <- glm(Exam.bin ~ Gender + HDI, data = mooc_reduit, family = binomial)
+
+summary(model)
+```
+
+### intervalles de confiance
+```{r}
+conf_int <- exp(confint(model))
+odds_ratios <- exp(coef(model))
+
+odds_table <- data.frame(
+  
+  Odd_Ratio = odds_ratios,
+  CI_Lower = conf_int[, 1],
+  CI_Upper = conf_int[, 2]
+)
+
+odds_table
+```
+
+```{r}
+odds_table <- odds_table %>%
+  mutate(Variable = names(odds_ratios))
+
+```
+
+
+```{r}
+forestplot(labeltext = odds_table$Variable,
+           mean = odds_table$Odd_Ratio,
+           lower = odds_table$CI_Lower,
+           upper = odds_table$CI_Upper,
+           zero = 1,  # Ligne verticale à 1 (indique l'absence d'effet)
+           xlab = "Odd Ratio (95% CI)", 
+           title = "Forest Plot des Odd Ratios",
+           boxsize = 0.1,  # Taille des carrés
+           lineheight = unit(0.8, "lines"))
+
+```
+
+
+```{r}
+ggplot(odds_table, aes(x = Variable, y = Odd_Ratio, ymin = CI_Lower, ymax = CI_Upper)) +
+  geom_pointrange() +
+  coord_flip() +  # Permet de retourner l'axe des x et y
+  theme_minimal() +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "red") +  # Ligne à y = 1
+  labs(
+    title = "Forest Plot des Odds Ratios",
+    x = "Variable",
+    y = "Odds Ratio"
+  )
+
+```
+
+
+### 2e version de l'odd ratio
+
+```{r}
+mooc_reduit <- mooc_reduit %>%
+  mutate(
+    HDI_TH = ifelse(HDI == "TH", 1, 0),
+    HDI_I = ifelse(HDI == "I", 1, 0),
+    HDI_B = ifelse(HDI == "B", 1, 0),
+    GenderF = ifelse(Gender == "F", 1, 0), 
+    GenderM = ifelse(Gender == "M", 1, 0)
+  ) %>%
+  select(-HDI,-Gender) # Suppression de la colonne HDI originale
+
+head(mooc_reduit)
+```
+
+
+### Régression logistique
+```{r}
+modele_logistique <- glm(Exam.bin ~ GenderM+ GenderF + HDI_TH + HDI_I + HDI_B, data = mooc_reduit, family = binomial)
+summary(modele_logistique)
+```
+
+
+### Table d'odds ratios
+```{r}
+odds_ratios <- exp(coef(modele_logistique))
+conf_int <- exp(confint(modele_logistique))
+odds_ratios_table <- cbind(Odds_Ratio = odds_ratios, conf_int)
+
+
+odds_ratios_table <- odds_ratios_table %>% 
+  as_tibble(rownames = "Variable") %>% 
+  mutate(across(where(is.numeric), round, 2))
+
+
+print(odds_ratios_table)
+```
+
+### Extraire les p-values du modèle
+```{r}
+p_values <- summary(modele_logistique)$coefficients[, 4]
+names(p_values) <- rownames(summary(modele_logistique)$coefficients)
+p_values
+```
+
+```{r}
+#fonction pour ajouter des astérisques en fonction des p-values
+add_asterisks <- function(p_value) {
+  if (is.na(p_value)) return("")  
+  if (p_value < 0.01) return("***")
+  if (p_value < 0.05) return("**")
+  if (p_value < 0.1) return("*")
+  return("")  # pas d'* si p >= 0.1
+}
+```
+
+
+```{r}
+# astérisques pour les variables significatives
+odds_ratios_table2 <- odds_ratios_table
+
+odds_ratios_table2$Asterisques <- sapply(odds_ratios_table2$Variable, function(var) {
+  if (var %in% c("GenderF", "HDI_B")) {
+    return("")  # pas d'* pour GenderF et HDI_B
+  }
+  p_val <- p_values[var]
+  add_asterisks(p_val)
+})
+```
+
+
+```{r}
+#ajout des astérisques dans la colonne Variable
+odds_ratios_table2 <- odds_ratios_table2 %>%
+  mutate(
+    Odds_Ratio = paste0(Odds_Ratio, Asterisques),
+    `2.5 %` = paste0(`2.5 %`, Asterisques),
+    `97.5 %` = paste0(`97.5 %`, Asterisques)
+  ) %>%
+  select(-Asterisques)
+
+
+print(odds_ratios_table2)
+
+```
+On pourra ajouter le label Ref manuellement dans le rapport.
+
+### Forest plot
+```{r}
+forest_data <- data.frame(
+  Variable = rownames(odds_ratios_table),
+  OR = odds_ratios_table$Odds_Ratio,
+  Lower = odds_ratios_table$`2.5 %`,
+  Upper = odds_ratios_table$`97.5 %`
+)
+
+forest_data <- forest_data[-1,] #On enlève l'intercept
+
+forest_data$Variable <- gsub("HDI_TH", "HDI TH", forest_data$Variable)
+forest_data$Variable <- gsub("HDI_I", "HDI I", forest_data$Variable)
+forest_data$Variable <- gsub("HDI_B", "HDI B", forest_data$Variable)
+forest_data$Variable <- gsub("GenderHomme", "Genre Homme", forest_data$Variable)
+
+ggplot(forest_data, aes(x = Variable, y = OR, ymin = Lower, ymax = Upper)) +
+  geom_pointrange(size = 1) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "red") +
+  coord_flip() +
+  labs(title = "Forest Plot des Odds Ratios",
+       x = "Variable",
+       y = "Odds Ratio (avec IC 95%)") +
+  theme_bw() +
+    theme(plot.title = element_text(hjust = 0.5))
+```
+
+## 6.2
+
+```{r}
+math_compet <- read.csv("../data/maths_competition_awards_data.csv")
+head(math_compet)
+```
+
+### Echantillon aléatoire
+```{r}
+training_index <- sample(1:nrow(math_compet), size = 0.8 * nrow(math_compet))
+
+# Séparer les données
+training_data <- math_compet[training_index, ] #80%
+test_data <- math_compet[-training_index, ] #20%
+
+```
+
+### Visualisation des distributions
+```{r}
+hist(training_data$Awards, 
+     main="Répartition des Récompenses des Candidats", 
+     xlab="Nombre de Récompenses", 
+     col="lightblue", 
+     border="black", 
+     breaks=10)  
+
+hist(training_data$Math.Score, 
+     main="Répartition des Notes en Mathématiques", 
+     xlab="Note en Mathématiques", 
+     col="lightgreen", 
+     border="black", 
+     breaks=15)  
+
+
+```
+```{r}
+boxplot(training_data$Awards, 
+        main="Répartition des Récompenses par Candidat", 
+        ylab="Nombre de Récompenses", 
+        col="lightblue")
+
+boxplot(training_data$Math.Score, 
+        main="Répartition des Notes en Mathématiques", 
+        ylab="Note en Mathématiques", 
+        col="lightgreen")
+
+```
+
+### Modèle de poisson
+```{r}
+modele_poisson <- glm(Awards ~ Math.Score, 
+                      family = poisson(link = "log"), 
+                      data = training_data)
+
+summary(modele_poisson)
+```
+
+### Diagnostic du modèle
+```{r}
+# Q-Q plot des résidus de deviance
+residus_deviance <- residuals(modele_poisson, type = "deviance")
+
+qqnorm(residus_deviance, main="Q-Q Plot des Résidus de Deviance")
+qqline(residus_deviance, col = "red")
+```
+
+```{r}
+# résidus de deviance
+plot(residus_deviance, main="Résidus de Deviance", 
+     ylab="Résidus de Deviance", xlab="Index des Observations")
+abline(h = 0, col = "red", lty = 2)
+
+```
+
+```{r}
+# calcul de la distance de Cook
+cooks_dist <- cooks.distance(modele_poisson)
+
+# distance de Cook tracée
+plot(cooks_dist, type = "h", main="Distance de Cook", 
+     ylab="Distance de Cook", xlab="Index des Observations")
+abline(h = 4 / nrow(training_data), col = "red", lty = 2)  # seuil de 4/n
+
+```
+
+```{r}
+# Histogramme des résidus de deviance
+hist(residus_deviance, main="Histogramme des Résidus de Deviance", 
+     xlab="Résidus de Deviance", col="lightblue", border="black", 
+     breaks=15)
+
+```
+
+### Graphes prédiction et données empiriques
+
+```{r}
+# Données d'entraînement
+
+predictions_train <- predict(modele_poisson, type = "response")
+
+plot(training_data$Math.Score, training_data$Awards, 
+     main = "Relation entre Notes et Récompenses (Entraînement)", 
+     xlab = "Notes en Mathématiques (Math.Score)", 
+     ylab = "Nombre de Récompenses (Awards)", 
+     pch = 16, col = "blue", cex = 0.6, 
+     xlim = range(training_data$Math.Score), 
+     ylim = range(training_data$Awards))
+
+#la ligne des prédictions du modèle pour les données d'entraînement
+lines(sort(training_data$Math.Score), 
+      predictions_train[order(training_data$Math.Score)], 
+      col = "red", lwd = 2)
+
+legend("topright", 
+       legend = c("Données empiriques", "Prédictions du modèle"), 
+       col = c("blue", "red"), 
+       pch = c(16, NA), 
+       lwd = c(NA, 2), 
+       bty = "n", 
+       cex = 0.8)
+
+```
+
+```{r}
+#Données de test
+predictions_test <- predict(modele_poisson, newdata = test_data, type = "response")
+
+plot(test_data$Math.Score, test_data$Awards, 
+     main = "Relation entre Notes et Récompenses (Test)", 
+     xlab = "Notes en Mathématiques (Math.Score)", 
+     ylab = "Nombre de Récompenses (Awards)", 
+     pch = 16, col = "green", cex = 0.6, 
+     xlim = range(test_data$Math.Score), 
+     ylim = range(test_data$Awards))
+
+#ligne des prédictions du modèle pour les données de test
+lines(sort(test_data$Math.Score), 
+      predictions_test[order(test_data$Math.Score)], 
+      col = "orange", lwd = 2)
+
+#légende pour expliquer les éléments du graphique
+legend("topright", 
+       legend = c("Données empiriques", "Prédictions du modèle"), 
+       col = c("green", "orange"), 
+       pch = c(16, NA), 
+       lwd = c(NA, 2), 
+       bty = "n", 
+       cex = 0.8)
+
+
+```
+
+
+### Erreur
+```{r}
+# calcul de l'erreur (RMSE et MAE) pour les données d'entraînement
+rmse_train <- sqrt(mean((training_data$Awards - predictions_train)^2))
+mae_train <- mean(abs(training_data$Awards - predictions_train))
+
+# calcul de l'erreur (RMSE et MAE) pour les données de test
+rmse_test <- sqrt(mean((test_data$Awards - predictions_test)^2))
+mae_test <- mean(abs(test_data$Awards - predictions_test))
+
+
+cat("Erreur pour les données d'entraînement :\n")
+cat("RMSE (Entraînement) :", rmse_train, "\n")
+cat("MAE (Entraînement) :", mae_train, "\n\n")
+
+cat("Erreur pour les données de test :\n")
+cat("RMSE (Test) :", rmse_test, "\n")
+cat("MAE (Test) :", mae_test, "\n")
+
+```
+
+## 6.3 Données du MOOC, diagnostics et loi de Poisson
+
+```{r}
+head(mooc)
+```
+
+
+```{r}
+lambda <- mean(mooc$videos_visionnees, na.rm = TRUE)
+
+ggplot(mooc, aes(x = videos_visionnees)) +
+  geom_histogram(binwidth = 3, fill = "pink", color = "black", size = 0.8, alpha = 0.7) +
+  labs(
+    title = "Distribution du nombre de vidéos vues",
+    x = "Nombre de vidéos vues",
+    y = "Effectif"
+  ) +
+  theme_minimal() +
+  geom_vline(aes(xintercept = lambda), 
+             color = "blue", linetype = "dashed", size = 1) +  # Ligne verticale : lambda
+  annotate("text", x = lambda + 5, 
+           y = max(table(mooc$videos_visionnees)), label = paste("Lambda =", round(lambda, 2)), 
+           color = "blue", size = 5)
+
+```
+
+### Normalité de la distribution de la variable : quelques graphes
+
+```{r}
+# QQ-plot pour vérifier la normalité
+qqnorm(mooc$videos_visionnees, main = "QQ-plot de la variable")
+qqline(mooc$videos_visionnees, col = "red")
+
+```
+
+```{r}
+poisson_model2 <- glm(videos_visionnees ~ Gender + HDI, family = poisson(link = "log"), data = mooc)
+summary(poisson_model2)
+plot(poisson_model2)
+```
+
+
+
+### Modélisation avec un modèle de régression de Poisson
+```{r}
+poisson_model <- glm(videos_visionnees ~ Gender + HDI, 
+                     family = poisson(link = "log"), 
+                     data = mooc)
+
+summary(poisson_model)
+
+```
+
+### Proposition analyse suplé
+
+```{r}
+poisson_model_interaction <- glm(videos_visionnees ~ Gender * HDI, 
+                                 family = poisson(link = "log"), 
+                                 data = mooc)
+summary(poisson_model_interaction)
+```
+
